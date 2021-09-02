@@ -1,11 +1,24 @@
 import Foundation
 import CoreBluetooth
 import Accelerate
-
+let monitorPre:String = "330E1F35-A6EA-44D7-8FDF-"
 let DeviceInformation = CBUUID(string:"180A")
 let ManufacturerName = CBUUID(string:"2A29")
 let ModelName = CBUUID(string:"2A24")
+let SerialName = CBUUID(string:"2A25")
 let ExposureNotification = CBUUID(string:"FD6F")
+
+extension Data {
+    struct HexEncodingOptions: OptionSet {
+        let rawValue: Int
+        static let upperCase = HexEncodingOptions(rawValue: 1 << 0)
+    }
+
+    func hexEncodedString(options: HexEncodingOptions = []) -> String {
+        let format = options.contains(.upperCase) ? "%02hhX" : "%02hhx"
+        return self.map { String(format: format, $0) }.joined()
+    }
+}
 
 func getMACFromUUID(_ uuid: String) -> String? {
     guard let plist = NSDictionary(contentsOfFile: "/Library/Preferences/com.apple.Bluetooth.plist") else { return nil }
@@ -31,6 +44,7 @@ class Device: NSObject {
     var scanTimer: Timer?
     var macAddr: String?
     var blName: String?
+    var serialName: String?
     
     override var description: String {
         get {
@@ -292,15 +306,54 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     {
         let rssi = RSSI.intValue > 0 ? 0 : RSSI.intValue
         if let uuid = monitoredUUID {
-            if peripheral.identifier.description == uuid.description {
-                if monitoredPeripheral == nil {
-                    monitoredPeripheral = peripheral
+            if let data = advertisementData["kCBAdvDataManufacturerData"] as? Data {
+                if data.count >= 25 {
+                    var iBeaconPrefix : [uint16] = [0x004c, 0x01502]
+                    if data[0...3] == Data(bytes: &iBeaconPrefix, count: 4) {
+                        let serial = data[4...19];
+                        let str = serial.hexEncodedString();
+                        let t = uuid.description.lowercased().replacingOccurrences(of: "-", with: "");
+                        if str == t {
+                            if devices[peripheral.identifier] == nil{
+                               let device = Device(uuid: peripheral.identifier)
+                                device.peripheral = peripheral
+                                device.rssi = rssi
+                                device.advData = advertisementData["kCBAdvDataManufacturerData"] as? Data
+                                device.serialName = data[14...19].hexEncodedString().uppercased();
+                                devices[peripheral.identifier] = device
+                                delegate?.newDevice(device: device)
+                            }
+                        }
+                    }
                 }
-                if activeModeTimer == nil {
-                    //print("Discover \(rssi)dBm")
-                    updateMonitoredPeripheral(rssi)
-                    if !passiveMode {
-                        connectMonitoredPeripheral()
+            }
+            let dev = devices[peripheral.identifier]
+            if dev != nil {
+                if let ser = dev?.serialName{
+                    if monitorPre + ser == uuid.description {
+                        if monitoredPeripheral == nil {
+                            monitoredPeripheral = peripheral
+                        }
+                        if activeModeTimer == nil {
+                            //print("Discover \(rssi)dBm")
+                            updateMonitoredPeripheral(rssi)
+                            if !passiveMode {
+                                connectMonitoredPeripheral()
+                            }
+                        }
+                    }
+                }
+            }else{
+                if peripheral.identifier.description == uuid.description{
+                    if monitoredPeripheral == nil {
+                        monitoredPeripheral = peripheral
+                    }
+                    if activeModeTimer == nil {
+                        //print("Discover \(rssi)dBm")
+                        updateMonitoredPeripheral(rssi)
+                        if !passiveMode {
+                            connectMonitoredPeripheral()
+                        }
                     }
                 }
             }
@@ -389,7 +442,7 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         if let services = peripheral.services {
             for service in services {
                 if service.uuid == DeviceInformation {
-                    peripheral.discoverCharacteristics([ManufacturerName, ModelName], for: service)
+                    peripheral.discoverCharacteristics([ManufacturerName, ModelName,SerialName], for: service)
                 }
             }
         }
@@ -401,7 +454,7 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     {
         if let chars = service.characteristics {
             for chara in chars {
-                if chara.uuid == ManufacturerName || chara.uuid == ModelName {
+                if chara.uuid == ManufacturerName || chara.uuid == ModelName || chara.uuid == SerialName {
                     peripheral.readValue(for:chara)
                 }
             }
@@ -422,6 +475,10 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                     }
                     if characteristic.uuid == ModelName {
                         device.model = s
+                        delegate?.updateDevice(device: device)
+                    }
+                    if characteristic.uuid == SerialName {
+                        device.serialName = s
                         delegate?.updateDevice(device: device)
                     }
                     if device.model != nil && device.model != nil && device.peripheral != monitoredPeripheral {

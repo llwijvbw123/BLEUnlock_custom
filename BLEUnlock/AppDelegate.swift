@@ -17,6 +17,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     let timeoutMenu = NSMenu()
     let lockDelayMenu = NSMenu()
     var deviceDict: [UUID: NSMenuItem] = [:]
+    var devices: [UUID: Device] = [:]
     var monitorMenuItem : NSMenuItem?
     let prefs = UserDefaults.standard
     var displaySleep = false
@@ -98,14 +99,26 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     func newDevice(device: Device) {
         let menuItem = deviceMenu.addItem(withTitle: menuItemTitle(device: device), action:#selector(selectDevice), keyEquivalent: "")
         deviceDict[device.uuid] = menuItem
+        devices[device.uuid] = device;
         if (device.uuid == ble.monitoredUUID) {
             menuItem.state = .on
+        }
+        if let ser = device.serialName {
+            if monitorPre + ser == ble.monitoredUUID?.description {
+                menuItem.state = .on
+            }
         }
     }
     
     func updateDevice(device: Device) {
         if let menu = deviceDict[device.uuid] {
             menu.title = menuItemTitle(device: device)
+            
+            if let ser = device.serialName {
+                if monitorPre + ser == ble.monitoredUUID?.description {
+                    menu.state = .on
+                }
+            }
         }
     }
     
@@ -354,8 +367,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     @objc func selectDevice(item: NSMenuItem) {
         for (uuid, menuItem) in deviceDict {
             if menuItem == item {
-                monitorDevice(uuid: uuid)
-                prefs.set(uuid.uuidString, forKey: "device")
+                let device = devices[uuid]
+                if let serialName = device?.serialName {
+                    if let t = UUID.init(uuidString: monitorPre + serialName){
+                        monitorDevice(uuid:t);
+                    }
+                    prefs.set(monitorPre + serialName, forKey: "device")
+                }else{
+                    monitorDevice(uuid: uuid)
+                    prefs.set(uuid.uuidString, forKey: "device")
+                }
                 menuItem.state = .on
             } else {
                 menuItem.state = .off
